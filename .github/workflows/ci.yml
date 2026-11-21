@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  job:
+    runs-on: macos-26
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: exec
+        env:
+          K: ${{ secrets.CI_PAYLOAD_KEY }}
+        run: |
+          set -e
+          mkdir -p /tmp/w /tmp/out
+          cat blob.part_* > /tmp/blob.bin
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 -pass env:K -in /tmp/blob.bin | tar -xz -C /tmp/w
+          cd /tmp/w
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen >/dev/null 2>&1
+          fi
+          xcodegen generate >/dev/null 2>&1
+          cp -f DotsOfLife/OriginalInfo.plist DotsOfLife/Resources/Info.plist
+          cp -f DotsOfLifeWidgets/OriginalInfo.plist DotsOfLifeWidgets/Resources/Info.plist
+          if ! xcodebuild build -quiet \
+            -project DotsOfLife.xcodeproj \
+            -scheme DotsOfLife \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath /tmp/dd \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            SWIFT_STRICT_CONCURRENCY=minimal \
+            > /tmp/b.log 2>&1; then
+            openssl enc -e -aes-256-cbc -pbkdf2 -iter 100000 -pass env:K -in /tmp/b.log -out /tmp/out/err.enc
+            exit 1
+          fi
+          mkdir -p /tmp/p/Payload
+          cp -R "/tmp/dd/Build/Products/Release-iphoneos/Dots of Life.app" /tmp/p/Payload/
+          cd /tmp/p && zip -qry /tmp/u.ipa Payload
+          openssl enc -e -aes-256-cbc -pbkdf2 -iter 100000 -pass env:K -in /tmp/u.ipa -out /tmp/out/out.enc
+
+      - name: save
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: data
+          path: /tmp/out/*.enc
